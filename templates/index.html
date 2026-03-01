@@ -1,0 +1,136 @@
+import os
+import requests
+import subprocess
+import threading
+import uuid
+import time
+from flask import Flask, render_template, request, jsonify
+
+app = Flask(__name__)
+os.makedirs('/tmp/anisub', exist_ok=True)
+os.makedirs('/tmp/fonts', exist_ok=True)
+
+tasks = {}
+
+# --- Font Setup ---
+FONTS = {
+    'SolaimanLipi': 'https://raw.githubusercontent.com/maateen/bangla-web-fonts/master/fonts/SolaimanLipi/SolaimanLipi.ttf',
+    'Noto Sans Bengali': 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansBengali/NotoSansBengali-Regular.ttf'
+}
+
+def setup_fonts():
+    for name, url in FONTS.items():
+        path = f'/tmp/fonts/{name.replace(" ", "_")}.ttf'
+        if not os.path.exists(path):
+            try:
+                r = requests.get(url, timeout=30)
+                with open(path, 'wb') as f: f.write(r.content)
+            except: pass
+    subprocess.run(['fc-cache', '-fv', '/tmp/fonts'], capture_output=True)
+
+setup_fonts()
+
+# --- Routes ---
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/extract', methods=['POST'])
+def extract_api():
+    # তোর এপিআই লজিক এখানে আসবে (extractor.py কল করবি)
+    return jsonify({"m3u8": "http://example.com/video.m3u8", "subtitle": "http://example.com/sub.srt"})
+
+@app.route('/api/start', methods=['POST'])
+def start_task():
+    task_id = str(uuid.uuid4())
+    
+    # FormData থেকে ডেটা নেওয়া (তোর HTML অনুযায়ী)
+    task_data = {
+        'video_url': request.form.get('video_url'),
+        'sub_mode': request.form.get('sub_mode'),
+        'font_name': request.form.get('font_name', 'SolaimanLipi'),
+        'font_size': request.form.get('font_size', '24'),
+        'font_color': request.form.get('font_color', 'White'),
+        'position': request.form.get('position', 'bottom'),
+        'title': request.form.get('title', 'Anime Episode'),
+        'status': 'running',
+        'stage': 'download',
+        'progress': 0,
+        'logs': ["Task initialized..."],
+        'post_link': None
+    }
+    
+    tasks[task_id] = task_data
+    
+    # ব্যাকগ্রাউন্ড থ্রেড শুরু
+    thread = threading.Thread(target=process_engine, args=(task_id,))
+    thread.start()
+    
+    return jsonify({'task_id': task_id})
+
+@app.route('/api/status/<task_id>')
+def get_status(task_id):
+    if task_id not in tasks: return jsonify({'error': 'Task not found'}), 404
+    return jsonify(tasks[task_id])
+
+# --- Processing Engine ---
+def process_engine(task_id):
+    task = tasks[task_id]
+    temp_video = f"/tmp/anisub/{task_id}_raw.mp4"
+    output_video = f"/tmp/anisub/{task_id}_final.mp4"
+    ass_path = f"/tmp/anisub/{task_id}.ass"
+
+    try:
+        # 1. DOWNLOAD
+        task['stage'] = 'download'
+        task['logs'].append("Downloading video from m3u8...")
+        task['progress'] = 10
+        # yt-dlp বা ffmpeg দিয়ে ডাউনলোড লজিক...
+        time.sleep(2) # Fake delay for testing
+        
+        # 2. SUBTITLE / TRANSLATE
+        task['stage'] = 'translate'
+        task['logs'].append("Translating subtitles to Bengali...")
+        task['progress'] = 30
+        time.sleep(2)
+
+        # 3. BURNING (FFmpeg)
+        task['stage'] = 'process'
+        task['logs'].append("Burning subtitles with FFmpeg (Optimized)...")
+        
+        # তোর UI থেকে আসা ফন্ট নাম ঠিক করা
+        f_name = task['font_name'].replace(" ", "_")
+        
+        # FFmpeg command with ASS filter for Bengali support
+        # এখানে scale ব্যবহার করা হয়েছে স্পিড বাড়ানোর জন্য
+        cmd = [
+            'ffmpeg', '-y', '-i', temp_video,
+            '-vf', f"scale=1280:-2,subtitles={ass_path}:fontsdir=/tmp/fonts/",
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
+            '-c:a', 'copy', output_video
+        ]
+        # subprocess.run(cmd) # একচুয়াল রান করার সময় আনকমেন্ট করবি
+        
+        task['progress'] = 80
+        time.sleep(2)
+
+        # 4. UPLOADING
+        task['stage'] = 'upload'
+        task['logs'].append("Uploading to Telegram...")
+        task['progress'] = 90
+        
+        # তোর uploader.py কল করবি এখানে
+        task['post_link'] = "https://t.me/yourchannel/1" 
+        
+        task['status'] = 'done'
+        task['stage'] = 'done'
+        task['progress'] = 100
+        task['logs'].append("✅ All steps completed successfully!")
+
+    except Exception as e:
+        task['status'] = 'error'
+        task['error'] = str(e)
+        task['logs'].append(f"❌ Error: {str(e)}")
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
