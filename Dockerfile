@@ -1,15 +1,22 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# সিস্টেম প্যাকেজ ইনস্টল (FFmpeg + Bengali Font Support)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    libass-dev \
+    fonts-noto \
+    fonts-noto-cjk \
+    wget \
+    gcc \
     fontconfig \
-    fonts-noto-bengali \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    -O /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp
 
 WORKDIR /app
-COPY . .
-RUN pip install -r requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "app.py"]
+COPY . .
+RUN fc-cache -fv
+
+CMD gunicorn --timeout 3600 --workers 1 --bind 0.0.0.0:$PORT app:app
